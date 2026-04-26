@@ -5,6 +5,7 @@ import os
 import threading
 import webbrowser
 import sys
+import datetime
 
 # Set appearance mode and color theme
 ctk.set_appearance_mode("dark")
@@ -46,6 +47,10 @@ class DiscordSoundMaker(ctk.CTk):
 
         self.btn_download = ctk.CTkButton(self, text="Create Clip", command=self.start_download_thread)
         self.btn_download.pack(pady=20)
+
+        # Bind Enter key to trigger download
+        self.btn_download.bind("<Return>", lambda e: self.start_download_thread())
+        self.entry_url.bind("<Return>", lambda e: self.start_download_thread())
 
         self.status_label = ctk.CTkLabel(self, text="Ready", text_color="gray")
         self.status_label.pack(pady=10)
@@ -103,38 +108,36 @@ class DiscordSoundMaker(ctk.CTk):
                     self.after(0, lambda: self.btn_download.configure(state="normal"))
                     return
 
-        # 1. Downloads a buffered segment (duration + 2s) using yt-dlp
-        buffered_duration = duration + 2
-        buffer_end_time = start_time + buffered_duration
-        
-        # yt-dlp command to download the buffered segment
+        # 1. Download the audio using yt-dlp (full audio)
         yt_dlp_command = [
             "yt-dlp",
             "--extract-audio",
             "--audio-format", "mp3",
-            f"--download-sections", f"*{start_time}-{buffer_end_time}",
             "-o", buffer_filename,
             url
         ]
 
         try:
             # Run yt-dlp
-            subprocess.run(yt_dlp_command, check=True, capture_output=True, text=True)
+            subprocess.run(yt_dlp_command, check=True, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
 
             if not os.path.exists(buffer_filename):
                 raise FileNotFoundError("Buffer file not created by yt-dlp")
 
-            # 2. Trims it to the exact duration using ffmpeg
+            # 2. Trim to exact start time and duration using ffmpeg
+            # -ss = seek to start time
+            # -t = duration in seconds
             ffmpeg_command = [
                 "ffmpeg",
                 "-y",
+                "-ss", str(start_time),
                 "-i", buffer_filename,
                 "-t", str(duration),
                 "-c:a", "copy",
                 output_filename
             ]
-            
-            subprocess.run(ffmpeg_command, check=True, capture_output=True, text=True)
+
+            subprocess.run(ffmpeg_command, check=True, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
 
             # 3. Cleans up the buffer file
             if os.path.exists(buffer_filename):
@@ -155,9 +158,19 @@ class DiscordSoundMaker(ctk.CTk):
 
         except subprocess.CalledProcessError as e:
             error_msg = e.stderr if e.stderr else str(e)
+            # Write to log file
+            with open("download_error.log", "w", encoding="utf-8") as f:
+                f.write(f"Time: {datetime.datetime.now()}\n")
+                f.write(f"Error: {error_msg}\n")
+                f.write(f"Command: {' '.join(yt_dlp_command)}\n")
             self.update_status(f"Error: {error_msg[:50]}...", "red")
         except Exception as e:
-            self.update_status(f"Error: {str(e)}", "red")
+            error_msg = str(e)
+            # Write to log file
+            with open("download_error.log", "w", encoding="utf-8") as f:
+                f.write(f"Time: {datetime.datetime.now()}\n")
+                f.write(f"Error: {error_msg}\n")
+            self.update_status(f"Error: {error_msg[:50]}...", "red")
         finally:
             # Re-enable the button in the main thread
             self.after(0, lambda: self.btn_download.configure(state="normal"))
